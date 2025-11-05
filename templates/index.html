@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Contextual RAG Chatbot</title>
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Custom scrollbar styling for a cleaner look */
+        #chat-log::-webkit-scrollbar {
+            width: 8px;
+        }
+        #chat-log::-webkit-scrollbar-thumb {
+            background-color: #6366f1; /* Indigo 500 */
+            border-radius: 10px;
+        }
+        #chat-log::-webkit-scrollbar-track {
+            background: #1f2937; /* Darker background */
+        }
+        /* Custom animation for loading indicator */
+        @keyframes pulse-dot {
+            0%, 100% { opacity: 0.5; }
+            50% { opacity: 1; }
+        }
+        .dot {
+            animation: pulse-dot 1.5s infinite ease-in-out;
+        }
+        .dot-2 {
+            animation-delay: 0.3s;
+        }
+        .dot-3 {
+            animation-delay: 0.6s;
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-100 min-h-screen font-sans flex items-center justify-center p-4">
+
+    <!-- Chat Container -->
+    <div class="w-full max-w-4xl h-[90vh] flex flex-col bg-gray-800 rounded-2xl shadow-2xl overflow-hidden">
+        
+        <!-- Header: Gradient and clearer title -->
+        <header class="p-4 bg-gradient-to-r from-indigo-700 to-indigo-900 text-white shadow-xl flex items-center justify-between">
+            <h1 class="text-2xl font-extrabold flex items-center tracking-wide">
+                <svg class="w-6 h-6 mr-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 13.255A23.931 23.931 0 0112 15c-3.183 0-6.22-.62-9-1.745M21 13.255V17m0-3.745V10M3 13.255V17m0-3.745V10m9-9l-9 9m9-9l9 9"></path></svg>
+                Documentation Assistant
+            </h1>
+            <span class="text-sm font-medium opacity-90 italic">RAG + Gemini 2.5 Flash</span>
+        </header>
+
+        <!-- Chat Log Area -->
+        <main id="chat-log" class="flex-grow p-6 space-y-6 overflow-y-auto bg-gray-900/50">
+            <!-- Initial welcome message -->
+            <div class="flex justify-start">
+                <div class="bg-indigo-600/20 text-indigo-100 p-4 rounded-b-xl rounded-tr-xl max-w-3xl shadow-lg border border-indigo-700/50">
+                    <p class="font-bold mb-2 text-indigo-300">🤖 Assistant</p>
+                    <p>Hello! I'm your technical assistant. I can only answer questions based on the internal Capillary documentation.</p>
+                    <p class="mt-2 text-xs italic text-indigo-400">Try asking about *Authentication* or *Loyalty Campaigns*.</p>
+                </div>
+            </div>
+            <!-- Messages will be appended here -->
+        </main>
+
+        <!-- Input Area: Sticky and visually separated -->
+        <div class="p-4 bg-gray-700 shadow-2xl border-t border-gray-600">
+            <div id="error-message" class="text-red-400 text-sm mb-2 hidden font-medium"></div>
+            <div class="flex space-x-3">
+                <input type="text" id="query-input" placeholder="Enter your documentation query here..."
+                    class="flex-grow p-3 bg-gray-800 border border-gray-600 rounded-xl text-white placeholder-gray-400 focus:outline-none focus:ring-4 focus:ring-indigo-500 transition duration-200 text-base"
+                    onkeydown="if(event.key === 'Enter') { document.getElementById('ask-button').click(); }">
+                
+                <button id="ask-button" onclick="askQuestion()"
+                    class="px-6 py-3 bg-indigo-600 text-white font-bold rounded-xl hover:bg-indigo-500 focus:outline-none focus:ring-4 focus:ring-indigo-500/70 shadow-lg transition duration-200 ease-in-out disabled:opacity-50 disabled:cursor-not-allowed transform hover:scale-[1.02]">
+                    Send
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- 🔑 Configuration ---
+        const API_KEY = ""; 
+        const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${API_KEY}`;
+        
+        // --- 📄 User Context Placeholder ---
+        const USER_CONTEXT = `
+        **CONTEXT: Capillary Technologies Documentation Summary**
+
+        1.  **Authentication:** API requests are authenticated using a Bearer token (\`Authorization: Bearer <TOKEN>\`). Tokens are generated via the \`/auth/token\` endpoint using a client ID and secret. Tokens expire every 60 minutes and must be refreshed.
+        2.  **Customer Management:** To create a customer, the required fields are: \`mobile_number\` (unique identifier), \`country_code\`, and \`first_name\`. Optional fields include \`email\`, \`birth_date\` (format YYYY-MM-DD), and \`loyalty_program_id\`.
+        3.  **Loyalty Campaigns:** Loyalty campaigns are created through the \`/campaigns\` endpoint. A basic campaign requires a \`name\`, \`type\` ('points' or 'discounts'), a \`start_date\`, and \`end_date\`. A reward rule must be defined, such as 'Earn 5 points for every $1 spent in the Retail category.'
+        `;
+
+        // --- 🤖 System Instructions (The LLM's Persona and Rules) ---
+        const SYSTEM_PROMPT = `
+        You are an expert technical support chatbot for Capillary Technologies, specializing in APIs, customer management, and loyalty campaigns. 
+        Your goal is to answer questions concisely and accurately using ONLY the provided CONTEXT. 
+        If the answer is not found in the context, state clearly, "I cannot find the answer in the provided documentation." 
+        Always provide a brief, direct answer.
+        `;
+
+        // --- 🌐 Core Functions ---
+        const chatLog = document.getElementById('chat-log');
+        const queryInput = document.getElementById('query-input');
+        const askButton = document.getElementById('ask-button');
+        const errorMessageDiv = document.getElementById('error-message');
+
+        // Function to create and append a message to the chat log
+        function appendMessage(sender, text, isError = false, sources = []) {
+            const messageContainer = document.createElement('div');
+            messageContainer.className = `flex ${sender === 'user' ? 'justify-end' : 'justify-start'}`;
+
+            const messageBubble = document.createElement('div');
+            
+            // New styling classes for better visual distinction
+            const userClasses = 'bg-blue-500 text-white rounded-b-xl rounded-tl-xl';
+            const botClasses = isError 
+                ? 'bg-red-700/30 text-red-200 rounded-b-xl rounded-tr-xl border border-red-700'
+                : 'bg-indigo-600/20 text-indigo-100 rounded-b-xl rounded-tr-xl border border-indigo-700/50';
+
+            messageBubble.className = `p-4 max-w-3xl shadow-lg transition-all duration-300 ${sender === 'user' ? userClasses : botClasses}`;
+            
+            messageBubble.innerHTML = `<p class="font-bold mb-1 ${sender === 'user' ? 'text-blue-100' : 'text-indigo-300'}">${sender === 'user' ? 'You' : '🤖 Assistant'}</p>`;
+
+            if (isError) {
+                messageBubble.innerHTML += `<p>❌ <span class="font-normal">${text}</span></p>`;
+                errorMessageDiv.textContent = `Error: ${text}`;
+                errorMessageDiv.classList.remove('hidden');
+            } else {
+                errorMessageDiv.classList.add('hidden');
+                // Simple formatting for bold text (from markdown **)
+                const formattedText = text.replace(/\*\*(.*?)\*\*/g, '<strong class="font-semibold">$1</strong>');
+                messageBubble.innerHTML += `<p class="leading-relaxed text-sm">${formattedText}</p>`;
+            }
+
+            // Enhanced sources display
+            if (sources.length > 0 && !isError) {
+                const sourcesHtml = sources.map((source, index) => 
+                    `<a href="${source}" target="_blank" class="text-xs text-indigo-300 hover:text-white underline block mt-1 transition-colors duration-150 font-mono">${index + 1}. ${source.split('/').pop()}</a>`
+                ).join('');
+                messageBubble.innerHTML += `<div class="mt-3 pt-3 border-t border-indigo-700/80"><p class="text-xs font-semibold text-indigo-400">📚 Referenced Sources:</p>${sourcesHtml}</div>`;
+            }
+
+            messageContainer.appendChild(messageBubble);
+            chatLog.appendChild(messageContainer);
+            chatLog.scrollTop = chatLog.scrollHeight; // Scroll to bottom
+        }
+
+        // Simulates the exponential backoff mechanism for API retries
+        async function fetchWithRetry(url, payload, maxRetries = 3, delay = 1000) {
+            for (let i = 0; i < maxRetries; i++) {
+                try {
+                    const response = await fetch(url, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+
+                    if (response.status === 429) {
+                        await new Promise(resolve => setTimeout(resolve, delay));
+                        delay *= 2; 
+                        continue;
+                    }
+
+                    if (!response.ok) {
+                        throw new Error(`API call failed with status: ${response.status} ${response.statusText}`);
+                    }
+                    
+                    return await response.json();
+
+                } catch (error) {
+                    if (i === maxRetries - 1) {
+                        throw error;
+                    }
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                    delay *= 2;
+                }
+            }
+        }
+
+        async function askQuestion() {
+            const query = queryInput.value.trim();
+            if (!query) return;
+
+            // 1. Display user query and clear input
+            appendMessage('user', query);
+            queryInput.value = '';
+            askButton.disabled = true;
+
+            // 2. Add loading indicator with pulsating dots
+            const loadingId = 'loading-' + Date.now();
+            appendMessage('bot', `
+                <div id="${loadingId}" class="flex items-center space-x-2 text-indigo-400">
+                    <span>Processing query</span>
+                    <span class="dot w-2 h-2 bg-indigo-500 rounded-full"></span>
+                    <span class="dot dot-2 w-2 h-2 bg-indigo-500 rounded-full"></span>
+                    <span class="dot dot-3 w-2 h-2 bg-indigo-500 rounded-full"></span>
+                </div>
+            `);
+
+            try {
+                // 3. Construct the prompt
+                const fullPrompt = `
+                    --- CONTEXT RETRIEVED FROM 1456 PAGES ---
+                    ${USER_CONTEXT}
+                    --- END CONTEXT ---
+                    
+                    USER QUERY: ${query}
+                `;
+
+                const payload = {
+                    contents: [{ parts: [{ text: fullPrompt }] }],
+                    systemInstruction: {
+                        parts: [{ text: SYSTEM_PROMPT }]
+                    },
+                    generationConfig: {
+                        temperature: 0.1,
+                        maxOutputTokens: 1024,
+                    }
+                };
+
+                // 4. Call the Gemini API
+                const result = await fetchWithRetry(API_URL, payload);
+                const candidate = result.candidates?.[0];
+
+                // 5. Extract text and simulated source metadata
+                let answerText = "Error: Could not process response from model.";
+                let sources = [];
+
+                if (candidate && candidate.content?.parts?.[0]?.text) {
+                    answerText = candidate.content.parts[0].text;
+                }
+                
+                // 6. Simulate sources
+                const lowerAnswer = answerText.toLowerCase();
+                if (lowerAnswer.includes('token') || lowerAnswer.includes('authenticated')) {
+                    sources.push('https://docs.capillary.tech/api/auth/token');
+                }
+                if (lowerAnswer.includes('customer') || lowerAnswer.includes('mobile_number')) {
+                    sources.push('https://docs.capillary.tech/api/customer/create');
+                }
+                if (lowerAnswer.includes('campaign') || lowerAnswer.includes('loyalty')) {
+                    sources.push('https://docs.capillary.tech/api/campaigns/loyalty');
+                }
+                
+                // 7. Remove loading indicator and append final answer
+                document.getElementById(loadingId).closest('.flex.justify-start').remove();
+                appendMessage('bot', answerText, false, sources);
+
+            } catch (e) {
+                // 8. Handle errors
+                const loadingElement = document.getElementById(loadingId);
+                if (loadingElement) loadingElement.closest('.flex.justify-start').remove();
+
+                console.error("Gemini API Error:", e);
+                appendMessage('bot', `An unexpected API error occurred: ${e.message}.`, true);
+            } finally {
+                // 9. Re-enable input
+                askButton.disabled = false;
+                queryInput.focus();
+            }
+        }
+    </script>
+</body>
+</html>
