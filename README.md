@@ -23,15 +23,6 @@
 
 ---
 
-## 🎥 Live Demo (1-Minute Video)
-
-▶️ [Watch the Demo on Google Drive](https://drive.google.com/file/d/your-video-id/view?usp=sharing) *(Replace with your link)*
-
-![Demo Preview](https://via.placeholder.com/800x400/1e293b/ffffff?text=CapillaryDocs+AI+Demo+Preview)  
-*(Tip: Record terminal + voiceover using OBS or Loom)*
-
----
-
 ## 🛠️ Tech Stack
 
 ```mermaid
